@@ -89,6 +89,86 @@ module OssEmulator
       OssResponse.response_ok(response, dataset)
     end
 
+    # PostObject
+    def self.post_object(bucket, object, request, response, part_number=nil)
+      # NoSuchBucket
+      return if OssResponse.response_no_such_bucket(response, bucket)
+
+      # InvalidObjectName
+      return if OssResponse.response_invalid_object_name(response, object)
+
+      check_chunked_filesize = false
+      if request.header.include?('content-length')
+        content_length = request.header['content-length'].first.to_i
+        Log.debug("put_object : content_length=#{content_length}", 'blue')
+
+        # InvalidArgument : Filesize <= 5G
+        if content_length>Object::MAX_OBJECT_FILE_SIZE
+          OssResponse.response_error(response, ErrorCode::INVALID_ARGUMENT)
+          return
+        end
+      else
+        if request.header.include?('transfer-encoding')
+          if request.header['transfer-encoding'].first!='chunked'
+            # MissingContentLength
+            OssResponse.response_error(response, ErrorCode::MISSING_CONTENT_LENGTH)
+            return
+          end
+          check_chunked_filesize = true
+          Log.debug("put_object : check_chunked_filesize=#{check_chunked_filesize}", 'blue')
+        else
+          # MissingContentLength
+          OssResponse.response_error(response, ErrorCode::MISSING_CONTENT_LENGTH)
+          return
+        end
+      end
+
+      obj_dir = File.join(Config.store, bucket, object)
+      if part_number
+        object_content_filename = File.join(obj_dir, "#{Store::OBJECT_CONTENT_PREFIX}#{part_number}")
+      else
+        OssUtil.delete_object_file_and_dir(bucket, object)
+        object_content_filename = File.join(obj_dir, Store::OBJECT_CONTENT)
+      end
+      FileUtils.mkdir_p(obj_dir) unless File.exist?(obj_dir)
+      f_object_content = File.new(object_content_filename, 'a')
+      f_object_content.binmode
+
+      content_type = request.content_type || ""
+      match = content_type.match(/^multipart\/form-data; boundary=(.+)/)
+      boundary = match[1] if match
+      if boundary
+        boundary = WEBrick::HTTPUtils::dequote(boundary)
+        form_data = WEBrick::HTTPUtils::parse_form_data(request.body, boundary)
+
+        if form_data['file'] == nil || form_data['file'] == ""
+          OssResponse.response_error(response, ErrorCode::BAD_REQUEST)
+          return
+        end
+
+        f_object_content.syswrite(form_data['file'])
+      else
+        total_size = 0
+        request.body do |chunk|
+          f_object_content.syswrite(chunk)
+          total_size += chunk.bytesize
+          if check_chunked_filesize && total_size>Object::MAX_OBJECT_FILE_SIZE
+            OssUtil.delete_object_file_and_dir(bucket, object)
+            OssResponse.response_error(response, ErrorCode::INVALID_ARGUMENT)
+            return
+          end
+        end
+      end
+      f_object_content.close()
+
+      dataset = {}
+      # put object metadata if not multipart upload
+      dataset = OssUtil.put_object_metadata(bucket, object, request) unless part_number
+
+      dataset[:cmd] = Request::PUT_OBJECT
+      OssResponse.response_ok(response, dataset)
+    end
+
     # CopyObject
     def self.copy_object(src_bucket, src_object, dst_bucket, dst_object, request, response)
       src_object_dir = File.join(Config.store, src_bucket, src_object)

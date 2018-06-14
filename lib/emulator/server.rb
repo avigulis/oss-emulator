@@ -77,6 +77,7 @@ module OssEmulator
       req = OssEmulator::Request.new(request)
       req.parse()
 
+      Log.debug('dino case:' + req.cmd)
       case req.cmd
       when Request::PUT_BUCKET
         Bucket.create_bucket(req.bucket, request, response)
@@ -123,7 +124,7 @@ module OssEmulator
       when Request::DELETE_MULTIPLE_OBJECTS
         Object.delete_multiple_objects(req.bucket, request, response)
       when Request::POST_OBJECT
-        OssResponse.response_error(response, ErrorCode::NOT_IMPLEMENTED)
+        Object.post_object(req.bucket, req.object, request, response)
       else 
         OssResponse.response_error(response, ErrorCode::BAD_REQUEST)
       end #case

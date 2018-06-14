@@ -283,6 +283,15 @@ module OssEmulator
     end
 
     def parse_post()
+      # 获取表单参数
+      content_type = request.content_type || ""
+      match = content_type.match(/^multipart\/form-data; boundary=(.+)/)
+      boundary = match[1] if match
+      if boundary
+        boundary = WEBrick::HTTPUtils::dequote(boundary)
+        form_data = WEBrick::HTTPUtils::parse_form_data(request.body, boundary)
+        @path = @path + "/" + form_data["key"]
+      end
       @path_length = @path.size
 
       if @is_path_style
